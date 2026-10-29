@@ -8,7 +8,7 @@ from typing import Optional, Any
 
 from config import VLLM_BASE_URL, VLLM_API_KEY, GATEWAY_HOST, GATEWAY_PORT, PERSONALITIES
 from database import get_user_by_api_key, log_request, count_recent_requests, init_db, seed_users
-from metrics import REQUESTS, DURATION, TOKENS
+from metrics import REQUESTS, DURATION, TOKENS, TTFT
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 app = FastAPI(title="LLM Gateway Pro")
@@ -117,6 +117,7 @@ async def chat_completions(
 
 async def _stream_from_vllm(payload: dict, user: dict, model: str):
     t0 = time.perf_counter()
+    first_token_at: Optional[float] = None
     prompt_tokens = 0
     completion_tokens = 0
     status = 200
@@ -138,6 +139,10 @@ async def _stream_from_vllm(payload: dict, user: dict, model: str):
                     if line.startswith("data: ") and not line.endswith("[DONE]"):
                         try:
                             chunk = json.loads(line[6:])
+                            if first_token_at is None:
+                                choices = chunk.get("choices") or []
+                                if choices and choices[0].get("delta", {}).get("content"):
+                                    first_token_at = time.perf_counter()
                             usage = chunk.get("usage")
                             if usage:
                                 prompt_tokens = usage.get("prompt_tokens", 0)
@@ -148,6 +153,8 @@ async def _stream_from_vllm(payload: dict, user: dict, model: str):
         latency_ms = (time.perf_counter() - t0) * 1000
         if status == 200:
             _record_success(user, model, latency_ms, prompt_tokens, completion_tokens, status)
+            if first_token_at is not None:
+                TTFT.labels(user=user["username"], model=model).observe(first_token_at - t0)
         else:
             log_request(
                 user_id=user["id"], model=model,

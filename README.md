@@ -76,13 +76,14 @@ A single-file Streamlit app that acts as a visible client against the gateway. I
 
 ### The observability
 
-The `metrics.py` module declares three Prometheus series:
+The `metrics.py` module declares four Prometheus series:
 
 - `gateway_requests_total` — counter, labeled by user, model, status.
 - `gateway_request_duration_seconds` — histogram, labeled by user and model.
 - `gateway_tokens_total` — counter, labeled by user, model, and type (prompt vs completion).
+- `gateway_ttft_seconds` — histogram, labeled by user and model. Time to the first content token on a streaming response — the latency the caller actually feels, as opposed to end-to-end request latency.
 
-The Grafana dashboard reads these and renders four panels: request rate per personality, p95 latency per personality, overall error percentage, and token throughput per user. Everything in `monitoring/grafana/` is loaded on container start, so the dashboard is version-controlled with the rest of the repo.
+The Grafana dashboard reads these and renders five panels: request rate per personality, p95 latency per personality, overall error percentage, token throughput per user, and TTFT p50/p95 per personality. Everything in `monitoring/grafana/` is loaded on container start, so the dashboard is version-controlled with the rest of the repo.
 
 ## Running it
 
@@ -144,7 +145,7 @@ for chunk in resp:
         print(chunk.choices[0].delta.content, end="", flush=True)
 ```
 
-The seeded users for local dev are `alice` (all three personalities) and `bob` (pirate only). Both have intentionally low rate limits so the 429 path is easy to see from the chat UI; raise them in `app/database.py` if you want to drive load tests.
+The seeded users for local dev are `alice` (all three personalities) and `bob` (pirate only). Both have intentionally low rate limits so the 429 path is easy to see from the chat UI. A third user, `bench` (API key `sk-bench-key`), has a very high limit and exists so `scripts/bench.py` can measure the serving stack without the rate limiter in the way.
 
 ### Load generator
 
@@ -153,6 +154,16 @@ The seeded users for local dev are `alice` (all three personalities) and `bob` (
 ```bash
 python scripts/load_gen.py 300 4
 ```
+
+### Benchmarks
+
+`scripts/bench.py` runs a concurrency sweep (`1 → 4 → 8 → 16`) against the gateway in both non-streaming and streaming modes, and reports per-level QPS, end-to-end latency percentiles, and streaming TTFT percentiles. It uses the dedicated `bench` seeded user (`sk-bench-key`, rate limit set absurdly high) so the limiter stays out of the way of the measurement:
+
+```bash
+python scripts/bench.py
+```
+
+Writes a Markdown summary to `results/bench.md`. The script is deliberately boring — it's measuring the whole stack (gateway + vLLM + GPU + driver) rather than isolating any one layer. Numbers from a laptop 4060 running a 0.5B model are not comparable to a datacenter A100 running a 70B model, so the point of the output is to make the latency/throughput *shape* visible — how QPS scales with concurrency, where p99 starts to diverge from p50, and whether TTFT stays flat under load.
 
 ## Layout
 

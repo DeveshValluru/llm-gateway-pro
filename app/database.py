@@ -96,9 +96,15 @@ def seed_users():
         "INSERT INTO users (username, api_key, rate_limit, allowed_models) VALUES (?, ?, ?, ?)",
         ("bob", "sk-bob-dev-key", 5, json.dumps(["pirate"]))
     )
+    # Dedicated benchmark user with a very high rate limit so scripts/bench.py
+    # measures the serving stack, not the rate limiter.
+    cur.execute(
+        "INSERT INTO users (username, api_key, rate_limit, allowed_models) VALUES (?, ?, ?, ?)",
+        ("bench", "sk-bench-key", 100000, json.dumps(["pirate", "genz", "formal"]))
+    )
     conn.commit()
     conn.close()
-    print("seeded 2 users")
+    print("seeded 3 users")
 
 
 
